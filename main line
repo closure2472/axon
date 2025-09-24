@@ -1,0 +1,657 @@
+import requests
+
+import time
+
+import os
+
+import re
+
+from typing import List, Iterable
+
+ 
+
+BASE_URL = "https://augustacwa.evidence.com"
+
+CLIENT_ID = os.environ.get("AXON_CLIENT_ID")
+
+CLIENT_SECRET = os.environ.get("AXON_CLIENT_SECRET")
+
+AGENCY_ID = os.environ.get("AXON_AGENCY_ID")
+
+POLL_INTERVAL = 15 * 60  # 15 minutes
+
+ 
+
+# 🔧 Access Token
+
+def get_access_token():
+
+    token_url = f"{BASE_URL}/api/oauth2/token"
+
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+    data = {
+
+        "grant_type": "client_credentials",
+
+        "client_id": CLIENT_ID,
+
+        "client_secret": CLIENT_SECRET,
+
+    }
+
+    try:
+
+        response = requests.post(token_url, headers=headers, data=data)
+
+        response.raise_for_status()
+
+        return response.json()["access_token"]
+
+    except Exception as e:
+
+        print(f"❌ Failed to retrieve access token: {e}")
+
+        return None
+
+ 
+
+# 🔧 Case Retrieval
+
+def fetch_cases(token):
+
+    headers = {"Authorization": f"Bearer {token}"}
+
+    url = f"{BASE_URL}/api/v1/agencies/{AGENCY_ID}/cases?pageSize=10"
+
+    try:
+
+        response = requests.get(url, headers=headers)
+
+        response.raise_for_status()
+
+        return response.json().get("data", [])
+
+    except Exception as e:
+
+        print(f"❌ Failed to fetch cases: {e}")
+
+        return []
+
+ 
+
+def fetch_case_details(case_id, token):
+
+    url = f"{BASE_URL}/api/v2/agencies/{AGENCY_ID}/cases/{case_id}"
+
+    headers = {
+
+        "Authorization": f"Bearer {token}",
+
+        "Accept": "application/json"
+
+    }
+
+    try:
+
+        response = requests.get(url, headers=headers)
+
+        response.raise_for_status()
+
+        return response.json()
+
+    except Exception as e:
+
+        print(f"⚠️ Failed to fetch case detail for {case_id}: {e}")
+
+        return None
+
+ 
+
+# 🔧 Case Update
+
+DRY_RUN = True  # Set to False to enable real updates
+
+ 
+
+# Some tenants expect JSON:API style PATCH; others accept POST. We'll try PATCH first, then POST fallback.
+
+ 
+
+def _do_update(url: str, headers: dict, body: dict, method: str):
+
+    if method == "PATCH":
+
+        return requests.patch(url, headers=headers, json=body)
+
+    return requests.post(url, headers=headers, json=body)
+
+ 
+
+ 
+
+def update_internal_number(case_id, new_numbers, token):
+
+    # Accept either list[str] or single str
+
+    if isinstance(new_numbers, str):
+
+        payload_value = new_numbers
+
+    else:
+
+        payload_value = list(new_numbers)
+
+ 
+
+    if DRY_RUN:
+
+        print(f"💡 [DRY RUN] Would update case {case_id} with internalNumber: {payload_value}")
+
+        return True
+
+ 
+
+    url = f"{BASE_URL}/api/v2/agencies/{AGENCY_ID}/cases/{case_id}"
+
+    common_headers = {
+
+        "Authorization": f"Bearer {token}",
+
+        "Accept": "application/json",
+
+        "Content-Type": "application/json"
+
+    }
+
+ 
+
+    # JSON body variants
+
+    list_body = {"data": {"attributes": {"extendedCaseMetadata": {"internalNumber": payload_value}}}}
+
+ 
+
+    # Try PATCH then POST
+
+    for method in ("PATCH", "POST"):
+
+        try:
+
+            resp = _do_update(url, common_headers, list_body, method)
+
+            if resp.status_code >= 400:
+
+                print(f"❌ Update failed ({'as list' if isinstance(payload_value, list) else 'as string'}) [{resp.status_code}] {resp.text}")
+
+                resp.raise_for_status()
+
+            print(f"✅ Case {case_id} updated successfully via {method}.")
+
+            return True
+
+        except Exception as e:
+
+            print(f"❌ Exception updating case {case_id} ({'as list' if isinstance(payload_value, list) else 'as single string'}): {e}")
+
+            continue
+
+ 
+
+    return False
+
+ 
+
+# =========================
+
+# Normalization helpers
+
+# =========================
+
+_VALID_FINAL = re.compile(r"^\d{2}-\d{4}$")
+
+_VALID_SHORT = re.compile(r"^(\d{2})-(\d{1,4})$")
+
+_CHAIN_FIVE = re.compile(r"(\d{2})-(\d{5})(?!\d)")  # five-digit suffix pairs
+
+_CHAIN_SHORT = re.compile(r"(\d{2})-(\d{1,4})(?!\d)")  # up to 4 digits; avoid partials
+
+_COMPACT_FIVE = re.compile(r"^(\d{2})(\d{5})$")
+
+_COMPACT_SHORT = re.compile(r"^(\d{2})(\d{4})$")
+
+ 
+
+ 
+
+def _uniq_preserve(seq):
+
+    seen = set()
+
+    out = []
+
+    for x in seq:
+
+        if x not in seen:
+
+            seen.add(x)
+
+            out.append(x)
+
+    return out
+
+ 
+
+ 
+
+def _pad_four(year: str, num: str) -> str:
+
+    """Normalize numeric component to exactly 4 digits with rules:
+
+    - If num has 5 digits and starts with '0', drop exactly one leading zero (e.g. 00894 -> 0894; 00032 -> 0032).
+
+    - If num has 5 digits and does NOT start with '0', treat as aberrant (ignore).
+
+    - If num has >5 digits, ignore.
+
+    - Otherwise left-pad to 4.
+
+    """
+
+    if not num or not num.isdigit():
+
+        return ""
+
+    nlen = len(num)
+
+    if nlen > 5:
+
+        return ""  # aberrant
+
+    if nlen == 5:
+
+        if num[0] == '0':
+
+            # drop exactly one leading zero, then enforce 4 digits
+
+            trimmed = num[1:]
+
+            try:
+
+                return f"{year}-{int(trimmed):04d}"
+
+            except ValueError:
+
+                return ""
+
+        else:
+
+            return ""  # aberrant like 14107
+
+    # 1..4 digits
+
+    try:
+
+        return f"{year}-{int(num):04d}"
+
+    except ValueError:
+
+        return ""
+
+ 
+
+ 
+
+def _segments(entry: str) -> List[str]:
+
+    # Split on spaces, commas, semicolons, slashes, backslashes
+
+    return [s for s in re.split(r"[\s,;/\\]+", entry) if s]
+
+ 
+
+ 
+
+def extract_normalized_from_raw(raw_entries: Iterable[str]) -> List[str]:
+
+    out: list[str] = []
+
+    for entry in raw_entries or []:
+
+        if not entry:
+
+            continue
+
+        entry = entry.strip().replace("#", "")
+
+        if not entry:
+
+            continue
+
+ 
+
+        # Skip clearly alphanumeric docket tokens like CR23000211-00
+
+        if re.search(r"[A-Za-z]", entry):
+
+            continue
+
+ 
+
+        for seg in _segments(entry):
+
+            # First capture all five-digit pairs to avoid partial grabs
+
+            for y, n in _CHAIN_FIVE.findall(seg):
+
+                keep = _pad_four(y, n)
+
+                if keep:
+
+                    out.append(keep)
+
+            # Then capture short pairs (up to 4) without consuming digits from longer tokens
+
+            for y, n in _CHAIN_SHORT.findall(seg):
+
+                keep = _pad_four(y, n)
+
+                if keep:
+
+                    out.append(keep)
+
+ 
+
+            # compact tokens like 250123 / 2501234
+
+            m = _COMPACT_FIVE.fullmatch(seg)
+
+            if m:
+
+                keep = _pad_four(m.group(1), m.group(2))
+
+                if keep:
+
+                    out.append(keep)
+
+                continue
+
+            m = _COMPACT_SHORT.fullmatch(seg)
+
+            if m:
+
+                keep = _pad_four(m.group(1), m.group(2))
+
+                if keep:
+
+                    out.append(keep)
+
+                continue
+
+ 
+
+            # direct short pair
+
+            m = _VALID_SHORT.fullmatch(seg)
+
+            if m:
+
+                keep = _pad_four(m.group(1), m.group(2))
+
+                if keep:
+
+                    out.append(keep)
+
+ 
+
+    # Only keep exact YY-#### format
+
+    out = [x for x in out if _VALID_FINAL.fullmatch(x)]
+
+    return sorted(_uniq_preserve(out))
+
+ 
+
+ 
+
+# 🔧 Normalizer (public)
+
+def normalize_internal_number(raw: List[str], title: str = "", description: str = "", tags: List[str] = []) -> List[str]:
+
+    """Return YY-#### strings.
+
+    Priority: use values from `raw` first. If none, fall back to other fields.
+
+    """
+
+    # From raw only
+
+    primary = extract_normalized_from_raw(raw)
+
+    if primary:
+
+        return primary
+
+    # Fallback (only if raw yielded nothing)
+
+    secondary = extract_normalized_from_raw([title, description] + (tags or []))
+
+    return secondary
+
+ 
+
+ 
+
+# 🔧 Invalid Case Flagger
+
+def flag_invalid_internal_numbers(cases):
+
+    print("\n🚩 Checking for invalid or missing internal numbers...")
+
+    invalid_cases = []
+
+    valid_pattern = _VALID_FINAL
+
+    for case in cases:
+
+        case_id = case.get("id", "UNKNOWN")
+
+        attr = case.get("attributes", {})
+
+        ext = attr.get("extendedCaseMetadata", {})
+
+        raw = ext.get("internalNumber", [])
+
+        title = attr.get("title", "")
+
+        desc = attr.get("description", "")
+
+        tags = attr.get("tags", [])
+
+ 
+
+        normalized = normalize_internal_number(raw, title, desc, tags)
+
+        if not normalized:
+
+            invalid_cases.append((case_id, "❌ MISSING"))
+
+        elif any(not valid_pattern.fullmatch(n) for n in normalized):
+
+            invalid_cases.append((case_id, f"❌ INVALID ➞ {', '.join(normalized)}"))
+
+ 
+
+    if invalid_cases:
+
+        print("⚠️ Found cases with missing or invalid internal numbers:")
+
+        for cid, reason in invalid_cases:
+
+            print(f"  - 🆔 {cid} ➞ {reason}")
+
+ 
+
+ 
+
+def find_next_available_number(existing_numbers: List[str], year_prefix: str) -> int:
+
+    max_num = 0
+
+    for number in existing_numbers:
+
+        if number.startswith(year_prefix + "-") and _VALID_FINAL.fullmatch(number):
+
+            try:
+
+                suffix = int(number.split("-")[1])
+
+                # already 4-digit; 0000..9999
+
+                max_num = max(max_num, suffix)
+
+            except Exception:
+
+                continue
+
+    return max_num + 1
+
+ 
+
+ 
+
+# 🔁 Main Poll Loop
+
+def main_loop():
+
+    while True:
+
+        print(f"\n🔁 Polling at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        token = get_access_token()
+
+        if not token:
+
+            print("⚠️ Skipping polling due to auth error.")
+
+            time.sleep(POLL_INTERVAL)
+
+            continue
+
+ 
+
+        cases = fetch_cases(token)
+
+        detailed_cases = []
+
+ 
+
+        for case in cases:
+
+            case_id = case["id"]
+
+            detail = fetch_case_details(case_id, token)
+
+            if detail:
+
+                detailed_cases.append(detail.get("data", {}))
+
+ 
+
+        flag_invalid_internal_numbers(detailed_cases)
+
+ 
+
+        print("\n🚩 Checking and updating malformed internal numbers...")
+
+        all_existing_numbers: List[str] = []
+
+        cases_to_assign: list[tuple[str, dict]] = []
+
+ 
+
+        for case_data in detailed_cases:
+
+            case_id = case_data.get("id")
+
+            attr = case_data.get("attributes", {})
+
+            ext = attr.get("extendedCaseMetadata", {})
+
+            raw = ext.get("internalNumber", [])
+
+            title = attr.get("title", "")
+
+            description = attr.get("description", "")
+
+            tags = attr.get("tags", [])
+
+ 
+
+            from_raw_only = extract_normalized_from_raw(raw)
+
+            if from_raw_only:
+
+                # we only normalize/fix using raw-derived values when present
+
+                normalized = from_raw_only
+
+                all_existing_numbers.extend(normalized)
+
+                if set(normalized) != set(raw):
+
+                    print(f"✏️ Fixing case {case_id}: {raw} ➞ {normalized}")
+
+                    update_internal_number(case_id, normalized, token)
+
+                continue
+
+ 
+
+            # raw empty or invalid only: try other fields just to harvest existing numbers (not to fix the case)
+
+            harvested = extract_normalized_from_raw([title, description] + (tags or []))
+
+            all_existing_numbers.extend(harvested)
+
+ 
+
+            # mark for assignment (true missing)
+
+            if not raw:
+
+                cases_to_assign.append((case_id, attr))
+
+ 
+
+        if cases_to_assign:
+
+            year_prefix = time.strftime("%y")
+
+            next_number = find_next_available_number(all_existing_numbers, year_prefix)
+
+ 
+
+            for case_id, _attr in cases_to_assign:
+
+                new_internal = [f"{year_prefix}-{next_number:04d}"]
+
+                print(f"🆕 Assigning new number to case {case_id}: {new_internal}")
+
+                update_internal_number(case_id, new_internal, token)
+
+                next_number += 1
+
+ 
+
+        print("⏱ Waiting 15 minutes...")
+
+        time.sleep(POLL_INTERVAL)
+
+ 
+
+ 
+
+if __name__ == "__main__":
+
+    main_loop()
