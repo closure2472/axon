@@ -8,7 +8,9 @@ import re
 
 from collections import Counter
 
-from typing import List, Iterable
+
+from typing import Iterable, List, Set, Tuple
+
 
  
 
@@ -68,23 +70,44 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
     all_cases: List[dict] = []
 
+    seen_ids: Set[str] = set()
+
     page_number = 1
 
     while True:
 
         params = {"pageSize": page_size, "pageNumber": page_number}
 
-        try:
+        for attempt in range(3):
 
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            try:
 
-            response.raise_for_status()
+                response = requests.get(url, headers=headers, params=params, timeout=30)
 
-        except Exception as e:
+                response.raise_for_status()
 
-            print(f"❌ Failed to fetch cases on page {page_number}: {e}")
+                break
 
-            break
+            except Exception as e:
+
+                if attempt < 2:
+
+                    wait_for = 2 ** attempt
+
+                    print(
+
+                        f"⚠️ Failed to fetch cases on page {page_number} (attempt {attempt + 1}/3): {e}; retrying in {wait_for}s."
+
+                    )
+
+                    time.sleep(wait_for)
+
+                    continue
+
+                print(f"❌ Failed to fetch cases on page {page_number}: {e}")
+
+                return all_cases
+
 
         payload = response.json() or {}
 
@@ -96,7 +119,24 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
             break
 
-        all_cases.extend(page_cases)
+
+        new_cases = 0
+
+        for case in page_cases:
+
+            case_id = case.get("id") if isinstance(case, dict) else None
+
+            if case_id and case_id in seen_ids:
+
+                continue
+
+            if case_id:
+
+                seen_ids.add(case_id)
+
+            all_cases.append(case)
+
+            new_cases += 1
 
         meta = payload.get("meta", {}) or {}
 
@@ -108,13 +148,17 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
             print(
 
-                f"📄 Retrieved page {page_number}: {len(page_cases)} cases (total collected {len(all_cases)}/{total_cases})."
+                f"📄 Retrieved page {page_number}: {len(page_cases)} cases (added {new_cases} new, total collected {len(all_cases)}/{total_cases})."
 
             )
 
         else:
 
-            print(f"📄 Retrieved page {page_number}: {len(page_cases)} cases (total collected {len(all_cases)}).")
+            print(
+
+                f"📄 Retrieved page {page_number}: {len(page_cases)} cases (added {new_cases} new, total collected {len(all_cases)})."
+
+            )
 
         total_pages = pagination.get("totalPages") or pagination.get("totalPageCount")
 
@@ -127,6 +171,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
             break
 
         page_number += 1
+
 
     return all_cases
 
@@ -144,20 +189,149 @@ def fetch_case_details(case_id, token):
 
     }
 
-    try:
+    for attempt in range(3):
 
-        response = requests.get(url, headers=headers, timeout=30)
 
-        response.raise_for_status()
+        try:
 
-        return response.json()
 
-    except Exception as e:
+            response = requests.get(url, headers=headers, timeout=30)
 
-        print(f"⚠️ Failed to fetch case detail for {case_id}: {e}")
+            response.raise_for_status()
 
-        return None
+            return response.json()
 
+        except Exception as e:
+
+            if attempt < 2:
+
+                wait_for = 2 ** attempt
+
+                print(
+
+                    f"⚠️ Failed to fetch case detail for {case_id} (attempt {attempt + 1}/3): {e}; retrying in {wait_for}s."
+
+                )
+
+                time.sleep(wait_for)
+
+                continue
+
+            print(f"⚠️ Failed to fetch case detail for {case_id}: {e}")
+
+            return None
+
+
+def _as_case_data(payload: dict) -> dict:
+
+    if not isinstance(payload, dict):
+
+        return {}
+
+    if "data" in payload and isinstance(payload["data"], dict):
+
+        return payload["data"]
+
+    return payload
+
+
+def _has_extended_metadata(case_data: dict) -> bool:
+
+    attributes = case_data.get("attributes", {}) if isinstance(case_data, dict) else {}
+
+    meta = attributes.get("extendedCaseMetadata")
+
+    return isinstance(meta, dict)
+
+
+
+# 🔎 Case Ownership Helpers
+
+
+def _extract_agency_ids(value) -> Set[str]:
+
+    ids: Set[str] = set()
+
+    if value in (None, ""):
+
+        return ids
+
+    if isinstance(value, str):
+
+        ids.add(value)
+
+        return ids
+
+    if isinstance(value, dict):
+
+        possible = value.get("id") or value.get("agencyId") or value.get("agency_id")
+
+        if isinstance(possible, str):
+
+            ids.add(possible)
+
+        for nested in value.values():
+
+            if isinstance(nested, (dict, list)):
+
+                ids.update(_extract_agency_ids(nested))
+
+        return ids
+
+    if isinstance(value, list):
+
+        for item in value:
+
+            ids.update(_extract_agency_ids(item))
+
+    return ids
+
+
+def classify_case_ownership(case_detail: dict) -> str:
+
+    case_data = _as_case_data(case_detail)
+
+    attributes = case_data.get("attributes", {}) if isinstance(case_data, dict) else {}
+
+    shared_from = attributes.get("caseSharedFrom")
+
+    shared_to = attributes.get("caseSharedTo")
+
+    share_source = attributes.get("caseShareSource")
+
+    has_any_share_metadata = any(
+
+        field not in (None, [], {}) for field in (shared_from, shared_to, share_source)
+
+    )
+
+    if not has_any_share_metadata:
+
+        return "owned"
+
+    agency_id = AGENCY_ID
+
+    shared_to_ids = _extract_agency_ids(shared_to)
+
+    shared_from_ids = _extract_agency_ids(shared_from)
+
+    share_source_ids = _extract_agency_ids(share_source)
+
+    if agency_id:
+
+        if agency_id in shared_to_ids or agency_id in share_source_ids:
+
+            return "shared"
+
+        if agency_id in shared_from_ids:
+
+            return "owned"
+
+    if shared_to_ids or shared_from_ids or share_source_ids:
+
+        return "excluded"
+
+    return "ambiguous"
 
 
 # 🔎 Case Ownership Helpers
@@ -363,11 +537,11 @@ _COMPACT_SHORT = re.compile(r"^(\d{2})(\d{4})$")
 
  
 
-def _uniq_preserve(seq):
+def _uniq_preserve(seq: Iterable[str]) -> List[str]:
 
-    seen = set()
+    seen: Set[str] = set()
 
-    out = []
+    out: List[str] = []
 
     for x in seq:
 
@@ -453,7 +627,7 @@ def _segments(entry: str) -> List[str]:
 
 def extract_normalized_from_raw(raw_entries: Iterable[str]) -> List[str]:
 
-    out: list[str] = []
+    out: List[str] = []
 
     for entry in raw_entries or []:
 
@@ -681,6 +855,7 @@ def main_loop():
 
         cases = fetch_cases(token)
 
+
         detailed_cases: List[dict] = []
 
         ownership_counts: Counter[str] = Counter()
@@ -689,33 +864,54 @@ def main_loop():
 
         for case in cases:
 
-            case_id = case["id"]
+            case_data = _as_case_data(case)
 
-            detail = fetch_case_details(case_id, token)
+            case_id = case_data.get("id") if isinstance(case_data, dict) else None
 
-            if not detail:
+            if not case_id:
 
                 continue
 
-            data = detail.get("data", {})
+            classification = classify_case_ownership(case_data)
 
-            classification = classify_case_ownership(data)
+            needs_detail = False
 
-            ownership_counts[classification] += 1
+            if classification == "ambiguous":
 
-            if classification in {"owned", "shared"}:
+                needs_detail = True
 
-                detailed_cases.append(data)
+            elif classification in {"owned", "shared"} and not _has_extended_metadata(case_data):
 
-            elif classification == "ambiguous":
+                needs_detail = True
+
+            if needs_detail:
+
+                detail = fetch_case_details(case_id, token)
+
+                if detail:
+
+                    detail_data = _as_case_data(detail)
+
+                    if detail_data:
+
+                        case_data = detail_data
+
+                        classification = classify_case_ownership(detail_data)
+
+            if classification == "excluded":
+
+                print(f"🚫 Skipping case {case_id}: not owned by or shared with this agency.")
+
+                continue
+
+            if classification == "ambiguous":
 
                 print(f"⚠️ Case {case_id} has ambiguous ownership metadata; including for safety.")
 
-                detailed_cases.append(data)
+            ownership_counts[classification] += 1
 
-            else:
+            qualifying_cases.append(case_data)
 
-                print(f"🚫 Skipping case {case_id}: not owned by or shared with this agency.")
 
 
 
@@ -731,7 +927,7 @@ def main_loop():
 
 
 
-        flag_invalid_internal_numbers(detailed_cases)
+        flag_invalid_internal_numbers(qualifying_cases)
 
  
 
@@ -739,11 +935,11 @@ def main_loop():
 
         all_existing_numbers: List[str] = []
 
-        cases_to_assign: list[tuple[str, dict]] = []
+        cases_to_assign: List[Tuple[str, dict]] = []
 
  
 
-        for case_data in detailed_cases:
+        for case_data in qualifying_cases:
 
             case_id = case_data.get("id")
 
