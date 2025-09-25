@@ -8,7 +8,7 @@ import re
 
 from collections import Counter
 
-from typing import List, Iterable
+from typing import Iterable, List, Set, Tuple
 
  
 
@@ -68,7 +68,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
     all_cases: List[dict] = []
 
-    seen_ids: set[str] = set()
+    seen_ids: Set[str] = set()
 
     page_number = 1
 
@@ -241,9 +241,9 @@ def _has_extended_metadata(case_data: dict) -> bool:
 # 🔎 Case Ownership Helpers
 
 
-def _extract_agency_ids(value) -> set[str]:
+def _extract_agency_ids(value) -> Set[str]:
 
-    ids: set[str] = set()
+    ids: Set[str] = set()
 
     if value in (None, ""):
 
@@ -443,11 +443,11 @@ _COMPACT_SHORT = re.compile(r"^(\d{2})(\d{4})$")
 
  
 
-def _uniq_preserve(seq):
+def _uniq_preserve(seq: Iterable[str]) -> List[str]:
 
-    seen = set()
+    seen: Set[str] = set()
 
-    out = []
+    out: List[str] = []
 
     for x in seq:
 
@@ -533,7 +533,7 @@ def _segments(entry: str) -> List[str]:
 
 def extract_normalized_from_raw(raw_entries: Iterable[str]) -> List[str]:
 
-    out: list[str] = []
+    out: List[str] = []
 
     for entry in raw_entries or []:
 
@@ -763,7 +763,7 @@ def main_loop():
 
         qualifying_cases: List[dict] = []
 
-        ownership_counts: Counter[str] = Counter()
+        ownership_counts: Counter = Counter()
 
 
 
@@ -839,7 +839,7 @@ def main_loop():
 
         all_existing_numbers: List[str] = []
 
-        cases_to_assign: list[tuple[str, dict]] = []
+        cases_to_assign: List[Tuple[str, dict]] = []
 
  
 
