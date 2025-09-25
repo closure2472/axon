@@ -10,6 +10,7 @@ import re
 
 from collections import Counter
 
+
 from typing import Iterable, List, Optional, Set, Tuple
 
  
@@ -117,6 +118,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
                 return all_cases
 
+
         payload = response.json() or {}
 
         page_cases = payload.get("data", [])
@@ -126,6 +128,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
             print(f"ℹ️ No cases returned on page {page_number}; stopping pagination.")
 
             break
+
 
         new_cases = 0
 
@@ -153,6 +156,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
         if total_cases:
 
+
             print(
 
                 f"📄 Retrieved page {page_number}: {len(page_cases)} cases (added {new_cases} new, total collected {len(all_cases)}/{total_cases})."
@@ -173,11 +177,13 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
             break
 
+
         if len(page_cases) < page_size:
 
             break
 
         page_number += 1
+
 
     return all_cases
 
@@ -292,6 +298,7 @@ def print_case_metadata(case_payload: dict, detail_payload: Optional[dict] = Non
 def _extract_agency_ids(value) -> Set[str]:
 
     ids: Set[str] = set()
+
 
     if value in (None, ""):
 
@@ -815,6 +822,7 @@ def main_loop():
 
 
 
+
         for case in cases:
 
             case_data = _as_case_data(case)
@@ -822,6 +830,7 @@ def main_loop():
             summary_case_data = case_data
 
             case_id = case_data.get("id") if isinstance(case_data, dict) else None
+
 
             if not case_id:
 
@@ -841,6 +850,7 @@ def main_loop():
 
             detail_payload: Optional[dict] = None
 
+
             if needs_detail:
 
                 detail = fetch_case_details(case_id, token)
@@ -857,6 +867,7 @@ def main_loop():
 
                         classification = classify_case_ownership(detail_data)
 
+
             print_case_metadata(summary_case_data, detail_payload)
 
             if classification == "excluded":
@@ -872,6 +883,7 @@ def main_loop():
             ownership_counts[classification] += 1
 
             qualifying_cases.append(case_data)
+
 
 
 
