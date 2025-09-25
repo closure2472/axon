@@ -8,7 +8,9 @@ import re
 
 from collections import Counter
 
+
 from typing import Iterable, List, Set, Tuple
+
 
  
 
@@ -106,6 +108,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
                 return all_cases
 
+
         payload = response.json() or {}
 
         page_cases = payload.get("data", [])
@@ -115,6 +118,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
             print(f"ℹ️ No cases returned on page {page_number}; stopping pagination.")
 
             break
+
 
         new_cases = 0
 
@@ -168,6 +172,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
         page_number += 1
 
+
     return all_cases
 
  
@@ -186,7 +191,9 @@ def fetch_case_details(case_id, token):
 
     for attempt in range(3):
 
+
         try:
+
 
             response = requests.get(url, headers=headers, timeout=30)
 
@@ -285,6 +292,93 @@ def classify_case_ownership(case_detail: dict) -> str:
     case_data = _as_case_data(case_detail)
 
     attributes = case_data.get("attributes", {}) if isinstance(case_data, dict) else {}
+
+    shared_from = attributes.get("caseSharedFrom")
+
+    shared_to = attributes.get("caseSharedTo")
+
+    share_source = attributes.get("caseShareSource")
+
+    has_any_share_metadata = any(
+
+        field not in (None, [], {}) for field in (shared_from, shared_to, share_source)
+
+    )
+
+    if not has_any_share_metadata:
+
+        return "owned"
+
+    agency_id = AGENCY_ID
+
+    shared_to_ids = _extract_agency_ids(shared_to)
+
+    shared_from_ids = _extract_agency_ids(shared_from)
+
+    share_source_ids = _extract_agency_ids(share_source)
+
+    if agency_id:
+
+        if agency_id in shared_to_ids or agency_id in share_source_ids:
+
+            return "shared"
+
+        if agency_id in shared_from_ids:
+
+            return "owned"
+
+    if shared_to_ids or shared_from_ids or share_source_ids:
+
+        return "excluded"
+
+    return "ambiguous"
+
+
+# 🔎 Case Ownership Helpers
+
+
+def _extract_agency_ids(value) -> set[str]:
+
+    ids: set[str] = set()
+
+    if value in (None, ""):
+
+        return ids
+
+    if isinstance(value, str):
+
+        ids.add(value)
+
+        return ids
+
+    if isinstance(value, dict):
+
+        possible = value.get("id") or value.get("agencyId") or value.get("agency_id")
+
+        if isinstance(possible, str):
+
+            ids.add(possible)
+
+        for nested in value.values():
+
+            if isinstance(nested, (dict, list)):
+
+                ids.update(_extract_agency_ids(nested))
+
+        return ids
+
+    if isinstance(value, list):
+
+        for item in value:
+
+            ids.update(_extract_agency_ids(item))
+
+    return ids
+
+
+def classify_case_ownership(case_detail: dict) -> str:
+
+    attributes = case_detail.get("attributes", {}) if isinstance(case_detail, dict) else {}
 
     shared_from = attributes.get("caseSharedFrom")
 
@@ -761,9 +855,10 @@ def main_loop():
 
         cases = fetch_cases(token)
 
-        qualifying_cases: List[dict] = []
 
-        ownership_counts: Counter = Counter()
+        detailed_cases: List[dict] = []
+
+        ownership_counts: Counter[str] = Counter()
 
 
 
@@ -816,6 +911,7 @@ def main_loop():
             ownership_counts[classification] += 1
 
             qualifying_cases.append(case_data)
+
 
 
 
