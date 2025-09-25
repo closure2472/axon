@@ -153,6 +153,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
         if total_cases:
 
+
             print(
 
                 f"📄 Retrieved page {page_number}: {len(page_cases)} cases (added {new_cases} new, total collected {len(all_cases)}/{total_cases})."
@@ -164,6 +165,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
             print(
 
                 f"📄 Retrieved page {page_number}: {len(page_cases)} cases (added {new_cases} new, total collected {len(all_cases)})."
+
 
             )
 
@@ -178,6 +180,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
             break
 
         page_number += 1
+
 
     return all_cases
 
@@ -293,7 +296,6 @@ def _normalize_agency_id(value: Optional[str]) -> Optional[str]:
 
     if not isinstance(value, str):
 
-        return None
 
     normalized = value.strip()
 
@@ -308,11 +310,13 @@ def _extract_agency_ids(value) -> Set[str]:
 
     ids: Set[str] = set()
 
+
     if value in (None, ""):
 
         return ids
 
     if isinstance(value, str):
+
 
         normalized = _normalize_agency_id(value)
 
@@ -333,6 +337,7 @@ def _extract_agency_ids(value) -> Set[str]:
             if normalized:
 
                 ids.add(normalized)
+
 
         for nested in value.values():
 
@@ -363,6 +368,7 @@ def classify_case_ownership(case_detail: dict) -> str:
 
     share_source = attributes.get("caseShareSource")
 
+
     owner = attributes.get("owner")
 
     shared_from_ids = _extract_agency_ids(shared_from)
@@ -378,6 +384,7 @@ def classify_case_ownership(case_detail: dict) -> str:
     if agency_id and agency_id in owner_ids:
 
         return "owned"
+
 
     has_any_share_metadata = any(
 
@@ -418,6 +425,7 @@ def classify_case_ownership(case_detail: dict) -> str:
     if shared_to_ids or share_source_ids:
 
         return "ambiguous"
+
 
     return "ambiguous"
 
@@ -862,6 +870,7 @@ def main_loop():
 
 
 
+
         for case in cases:
 
             case_data = _as_case_data(case)
@@ -869,6 +878,7 @@ def main_loop():
             summary_case_data = case_data
 
             case_id = case_data.get("id") if isinstance(case_data, dict) else None
+
 
             if not case_id:
 
@@ -888,6 +898,7 @@ def main_loop():
 
             detail_payload: Optional[dict] = None
 
+
             if needs_detail:
 
                 detail = fetch_case_details(case_id, token)
@@ -904,6 +915,7 @@ def main_loop():
 
                         classification = classify_case_ownership(detail_data)
 
+
             print_case_metadata(summary_case_data, detail_payload)
 
             if classification == "excluded":
@@ -919,6 +931,7 @@ def main_loop():
             ownership_counts[classification] += 1
 
             qualifying_cases.append(case_data)
+
 
 
 
