@@ -10,7 +10,6 @@ import re
 
 from collections import Counter
 
-
 from typing import Iterable, List, Optional, Set, Tuple
 
  
@@ -118,7 +117,6 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
                 return all_cases
 
-
         payload = response.json() or {}
 
         page_cases = payload.get("data", [])
@@ -128,7 +126,6 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
             print(f"ℹ️ No cases returned on page {page_number}; stopping pagination.")
 
             break
-
 
         new_cases = 0
 
@@ -169,6 +166,7 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
 
                 f"📄 Retrieved page {page_number}: {len(page_cases)} cases (added {new_cases} new, total collected {len(all_cases)})."
 
+
             )
 
         total_pages = pagination.get("totalPages") or pagination.get("totalPageCount")
@@ -176,7 +174,6 @@ def fetch_cases(token, page_size: int = 100) -> List[dict]:
         if total_pages and page_number >= total_pages:
 
             break
-
 
         if len(page_cases) < page_size:
 
@@ -295,6 +292,20 @@ def print_case_metadata(case_payload: dict, detail_payload: Optional[dict] = Non
 # 🔎 Case Ownership Helpers
 
 
+def _normalize_agency_id(value: Optional[str]) -> Optional[str]:
+
+    if not isinstance(value, str):
+
+
+    normalized = value.strip()
+
+    if not normalized:
+
+        return None
+
+    return normalized.lower()
+
+
 def _extract_agency_ids(value) -> Set[str]:
 
     ids: Set[str] = set()
@@ -306,7 +317,12 @@ def _extract_agency_ids(value) -> Set[str]:
 
     if isinstance(value, str):
 
-        ids.add(value)
+
+        normalized = _normalize_agency_id(value)
+
+        if normalized:
+
+            ids.add(normalized)
 
         return ids
 
@@ -316,7 +332,12 @@ def _extract_agency_ids(value) -> Set[str]:
 
         if isinstance(possible, str):
 
-            ids.add(possible)
+            normalized = _normalize_agency_id(possible)
+
+            if normalized:
+
+                ids.add(normalized)
+
 
         for nested in value.values():
 
@@ -347,6 +368,24 @@ def classify_case_ownership(case_detail: dict) -> str:
 
     share_source = attributes.get("caseShareSource")
 
+
+    owner = attributes.get("owner")
+
+    shared_from_ids = _extract_agency_ids(shared_from)
+
+    shared_to_ids = _extract_agency_ids(shared_to)
+
+    share_source_ids = _extract_agency_ids(share_source)
+
+    owner_ids = _extract_agency_ids(owner)
+
+    agency_id = _normalize_agency_id(AGENCY_ID)
+
+    if agency_id and agency_id in owner_ids:
+
+        return "owned"
+
+
     has_any_share_metadata = any(
 
         field not in (None, [], {}) for field in (shared_from, shared_to, share_source)
@@ -355,29 +394,38 @@ def classify_case_ownership(case_detail: dict) -> str:
 
     if not has_any_share_metadata:
 
+        if agency_id and owner_ids and agency_id not in owner_ids:
+
+            return "excluded"
+
         return "owned"
 
-    agency_id = AGENCY_ID
+    if shared_from_ids:
 
-    shared_to_ids = _extract_agency_ids(shared_to)
-
-    shared_from_ids = _extract_agency_ids(shared_from)
-
-    share_source_ids = _extract_agency_ids(share_source)
-
-    if agency_id:
-
-        if agency_id in shared_to_ids or agency_id in share_source_ids:
-
-            return "shared"
-
-        if agency_id in shared_from_ids:
+        if agency_id and agency_id in shared_from_ids:
 
             return "owned"
 
-    if shared_to_ids or shared_from_ids or share_source_ids:
+        return "shared"
 
-        return "excluded"
+    if agency_id and (agency_id in shared_to_ids or agency_id in share_source_ids):
+
+        return "shared"
+
+    if owner_ids:
+
+        if agency_id and agency_id in owner_ids:
+
+            return "owned"
+
+        if agency_id:
+
+            return "excluded"
+
+    if shared_to_ids or share_source_ids:
+
+        return "ambiguous"
+
 
     return "ambiguous"
 
